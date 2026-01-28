@@ -1,351 +1,155 @@
 #!/usr/bin/env python3
 """
-Kalshi Public Markets Scraper for Pydroid 3
-============================================
-Scrapes all available prediction markets from Kalshi's public API
-and saves them to a CSV file.
-
-No authentication required - uses public endpoints only.
+Kalshi Top 100 Non-Sports Markets Scraper
+For Pydroid 3 - Just copy and run!
 """
 
-# Check for requests library availability
 try:
     import requests
 except ImportError:
-    print("=" * 60)
-    print("ERROR: The 'requests' library is not installed!")
-    print("")
-    print("To install in Pydroid 3:")
-    print("  1. Open the side menu (swipe from left)")
-    print("  2. Tap 'Pip'")
-    print("  3. Search for 'requests'")
-    print("  4. Tap 'INSTALL'")
-    print("  5. Run this script again")
-    print("=" * 60)
+    print("ERROR: Install 'requests' via Pydroid Pip menu first!")
     raise SystemExit(1)
 
 import csv
 import time
 import os
-from datetime import datetime
 
-
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
-
-# Kalshi public API base URL (serves ALL markets, not just elections)
 BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
-
-# Output file name (saved in script directory)
 OUTPUT_FILE = "kalshi_public_markets.csv"
 
-# Pagination settings
-PAGE_LIMIT = 200  # Max allowed by API is 200
+# Sports keywords to filter out
+SPORTS_KEYWORDS = [
+    "nfl", "nba", "mlb", "nhl", "ncaa", "football", "basketball",
+    "baseball", "hockey", "soccer", "tennis", "golf", "ufc", "mma",
+    "boxing", "wrestling", "racing", "f1", "nascar", "pga", "fifa",
+    "world cup", "super bowl", "playoffs", "championship", "league",
+    "team", "player", "game", "match", "score", "win", "loss",
+    "patriots", "eagles", "chiefs", "49ers", "cowboys", "packers",
+    "lakers", "celtics", "warriors", "bulls", "heat", "nets",
+    "yankees", "dodgers", "cubs", "red sox", "mets", "braves",
+    "athlete", "coach", "mvp", "touchdown", "homerun", "slam dunk"
+]
 
-# Rate limiting - delay between API requests (in seconds)
-REQUEST_DELAY = 0.5  # Be respectful of rate limits
+def is_sports_market(market):
+    """Check if market is sports-related."""
+    text = (
+        (market.get("title") or "") + " " +
+        (market.get("subtitle") or "") + " " +
+        (market.get("event_ticker") or "") + " " +
+        (market.get("ticker") or "")
+    ).lower()
+    return any(kw in text for kw in SPORTS_KEYWORDS)
 
-# Progress reporting interval
-PROGRESS_INTERVAL = 20
-
-
-# =============================================================================
-# HELPER FUNCTIONS
-# =============================================================================
-
-def calculate_yes_probability(market):
-    """
-    Calculate the probability of 'Yes' for a market.
-
-    Priority:
-    1. Midpoint of yes_bid and yes_ask (if both exist)
-    2. Last traded price
-    3. yes_ask only (if no bid)
-    4. yes_bid only (if no ask)
-
-    Returns probability as a percentage (0-100) or None if unavailable.
-    """
-    yes_bid = market.get("yes_bid")
-    yes_ask = market.get("yes_ask")
-    last_price = market.get("last_price")
-
-    # Prices are in cents (0-100 scale already represents probability)
-
-    # Try midpoint of bid/ask first (most accurate current price)
-    if yes_bid and yes_ask and yes_bid > 0 and yes_ask > 0:
-        midpoint = (yes_bid + yes_ask) / 2
-        return round(midpoint, 2)
-
-    # Fall back to last traded price
-    if last_price and last_price > 0:
-        return round(last_price, 2)
-
-    # Use ask if available
-    if yes_ask and yes_ask > 0:
-        return round(yes_ask, 2)
-
-    # Use bid if available
-    if yes_bid and yes_bid > 0:
-        return round(yes_bid, 2)
-
+def calc_probability(m):
+    """Calculate Yes probability from bid/ask or last price."""
+    bid, ask, last = m.get("yes_bid"), m.get("yes_ask"), m.get("last_price")
+    if bid and ask and bid > 0 and ask > 0:
+        return round((bid + ask) / 2, 1)
+    if last and last > 0:
+        return round(last, 1)
+    if ask and ask > 0:
+        return round(ask, 1)
+    if bid and bid > 0:
+        return round(bid, 1)
     return None
 
-
-def get_market_description(market):
-    """
-    Build a readable market description from title and subtitle.
-    """
-    title = market.get("title", "")
-    subtitle = market.get("subtitle", "")
-
-    if title and subtitle:
-        return f"{title} - {subtitle}"
-    elif title:
-        return title
-    elif subtitle:
-        return subtitle
-    else:
-        return market.get("ticker", "Unknown")
-
-
-def fetch_markets_page(cursor=None):
-    """
-    Fetch a single page of markets from the Kalshi API.
-
-    Args:
-        cursor: Pagination cursor (None for first page)
-
-    Returns:
-        Tuple of (markets_list, next_cursor)
-        next_cursor is None if no more pages
-    """
-    url = f"{BASE_URL}/markets"
-
-    params = {
-        "limit": PAGE_LIMIT,
-    }
-
-    if cursor:
-        params["cursor"] = cursor
-
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "KalshiPublicScraper/1.0 (Pydroid3)"
-    }
-
-    response = requests.get(url, params=params, headers=headers, timeout=30)
-    response.raise_for_status()
-
-    data = response.json()
-
-    markets = data.get("markets", [])
-    next_cursor = data.get("cursor")
-
-    # Empty cursor means no more pages
-    if not next_cursor:
-        next_cursor = None
-
-    return markets, next_cursor
-
-
-def fetch_all_markets():
-    """
-    Fetch all markets from the Kalshi API, handling pagination.
-
-    Yields market dictionaries one at a time for memory efficiency.
-    """
+def fetch_markets():
+    """Fetch markets with pagination, filter sports, return top 100 by volume."""
+    all_markets = []
     cursor = None
-    total_fetched = 0
-    page_num = 0
+    page = 0
 
-    print("Starting to fetch markets from Kalshi API...")
-    print(f"API URL: {BASE_URL}/markets")
-    print("-" * 50)
+    print("Fetching markets from Kalshi...")
 
     while True:
-        page_num += 1
+        page += 1
+        params = {"limit": 200, "status": "open"}
+        if cursor:
+            params["cursor"] = cursor
 
         try:
-            markets, next_cursor = fetch_markets_page(cursor)
-        except requests.exceptions.RequestException as e:
-            print(f"\nError fetching page {page_num}: {e}")
-            print("Retrying in 5 seconds...")
-            time.sleep(5)
-            try:
-                markets, next_cursor = fetch_markets_page(cursor)
-            except requests.exceptions.RequestException as e:
-                print(f"Retry failed: {e}")
-                print("Stopping with markets collected so far.")
-                break
+            r = requests.get(f"{BASE_URL}/markets", params=params, timeout=30)
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            print(f"Error on page {page}: {e}")
+            break
 
+        markets = data.get("markets", [])
         if not markets:
-            print(f"Page {page_num}: No markets returned, ending pagination.")
             break
 
-        for market in markets:
-            total_fetched += 1
-            yield market
+        # Filter out sports markets
+        for m in markets:
+            if not is_sports_market(m):
+                all_markets.append(m)
 
-            # Progress update every PROGRESS_INTERVAL markets
-            if total_fetched % PROGRESS_INTERVAL == 0:
-                print(f"Retrieved {total_fetched} markets...")
+        print(f"Page {page}: {len(markets)} fetched, {len(all_markets)} non-sports total")
 
-        # Check if there are more pages
-        if next_cursor is None:
-            print(f"Page {page_num}: Last page reached.")
+        cursor = data.get("cursor")
+        if not cursor:
             break
 
-        cursor = next_cursor
+        time.sleep(0.3)
 
-        # Rate limiting delay
-        time.sleep(REQUEST_DELAY)
-
-    print("-" * 50)
-    print(f"Total markets fetched: {total_fetched}")
-
-
-def process_market(market):
-    """
-    Extract relevant data from a market object.
-
-    Returns a dictionary with the fields we want to save.
-    """
-    ticker = market.get("ticker", "")
-    description = get_market_description(market)
-
-    # Market size metrics
-    open_interest = market.get("open_interest", 0) or 0
-    volume = market.get("volume", 0) or 0
-    volume_24h = market.get("volume_24h", 0) or 0
-
-    # Probability calculation
-    yes_probability = calculate_yes_probability(market)
-
-    # Additional useful fields
-    status = market.get("status", "")
-    event_ticker = market.get("event_ticker", "")
-    close_time = market.get("close_time", "")
-
-    # Price details (in cents)
-    yes_bid = market.get("yes_bid", 0) or 0
-    yes_ask = market.get("yes_ask", 0) or 0
-    last_price = market.get("last_price", 0) or 0
-
-    return {
-        "ticker": ticker,
-        "event_ticker": event_ticker,
-        "description": description,
-        "status": status,
-        "open_interest": open_interest,
-        "total_volume": volume,
-        "volume_24h": volume_24h,
-        "yes_probability_pct": yes_probability,
-        "yes_bid_cents": yes_bid,
-        "yes_ask_cents": yes_ask,
-        "last_price_cents": last_price,
-        "close_time": close_time,
-    }
-
-
-def save_to_csv(markets_data, filename):
-    """
-    Save processed market data to a CSV file.
-
-    Args:
-        markets_data: List of processed market dictionaries
-        filename: Output CSV filename
-    """
-    if not markets_data:
-        print("No market data to save!")
-        return
-
-    # Get field names from first record
-    fieldnames = list(markets_data[0].keys())
-
-    # Get the directory where the script is located
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    filepath = os.path.join(script_dir, filename)
-
-    with open(filepath, "w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(markets_data)
-
-    print(f"\nCSV file saved: {filepath}")
-    print(f"Total records: {len(markets_data)}")
-
-    return filepath
-
-
-# =============================================================================
-# MAIN EXECUTION
-# =============================================================================
+    # Sort by open interest + volume, take top 100
+    all_markets.sort(
+        key=lambda x: (x.get("open_interest") or 0) + (x.get("volume") or 0),
+        reverse=True
+    )
+    return all_markets[:100]
 
 def main():
-    """
-    Main function to orchestrate the scraping process.
-    """
-    print("=" * 60)
-    print("KALSHI PUBLIC MARKETS SCRAPER")
-    print("=" * 60)
-    print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("")
+    print("=" * 50)
+    print("KALSHI TOP 100 NON-SPORTS MARKETS")
+    print("=" * 50)
 
-    # Collect all markets
-    all_markets = []
+    markets = fetch_markets()
 
-    try:
-        for market in fetch_all_markets():
-            processed = process_market(market)
-            all_markets.append(processed)
+    if not markets:
+        print("No markets found!")
+        return
 
-    except KeyboardInterrupt:
-        print("\n\nScraping interrupted by user!")
-        print(f"Saving {len(all_markets)} markets collected so far...")
+    # Process and save
+    rows = []
+    for i, m in enumerate(markets, 1):
+        title = m.get("title") or ""
+        subtitle = m.get("subtitle") or ""
+        desc = f"{title} - {subtitle}" if subtitle else title
 
-    except Exception as e:
-        print(f"\n\nUnexpected error: {e}")
-        print(f"Saving {len(all_markets)} markets collected so far...")
+        rows.append({
+            "rank": i,
+            "ticker": m.get("ticker", ""),
+            "description": desc,
+            "open_interest": m.get("open_interest") or 0,
+            "volume": m.get("volume") or 0,
+            "yes_probability": calc_probability(m),
+            "yes_bid": m.get("yes_bid") or 0,
+            "yes_ask": m.get("yes_ask") or 0,
+            "close_time": m.get("close_time") or ""
+        })
 
-    # Save results
-    if all_markets:
-        filepath = save_to_csv(all_markets, OUTPUT_FILE)
+        if i % 20 == 0:
+            print(f"Processed {i} markets...")
 
-        # Print summary statistics
-        print("\n" + "=" * 60)
-        print("SUMMARY")
-        print("=" * 60)
+    # Save CSV
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), OUTPUT_FILE)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=rows[0].keys())
+        w.writeheader()
+        w.writerows(rows)
 
-        # Count by status
-        status_counts = {}
-        for m in all_markets:
-            status = m["status"] or "unknown"
-            status_counts[status] = status_counts.get(status, 0) + 1
+    print(f"\nSaved: {path}")
+    print(f"Total: {len(rows)} markets")
 
-        print("\nMarkets by status:")
-        for status, count in sorted(status_counts.items()):
-            print(f"  {status}: {count}")
-
-        # Markets with trading activity
-        active_markets = [m for m in all_markets if m["open_interest"] > 0]
-        print(f"\nMarkets with open interest: {len(active_markets)}")
-
-        # Top markets by open interest
-        top_by_oi = sorted(all_markets, key=lambda x: x["open_interest"], reverse=True)[:5]
-        print("\nTop 5 markets by open interest:")
-        for i, m in enumerate(top_by_oi, 1):
-            desc = m["description"][:50] + "..." if len(m["description"]) > 50 else m["description"]
-            print(f"  {i}. {desc}")
-            print(f"     Open Interest: {m['open_interest']:,} | Yes Prob: {m['yes_probability_pct']}%")
-
-    else:
-        print("\nNo markets were collected. Check your internet connection.")
-
-    print("\n" + "=" * 60)
-    print(f"Finished at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 60)
-
+    # Show top 10
+    print("\n" + "=" * 50)
+    print("TOP 10 MARKETS:")
+    print("=" * 50)
+    for r in rows[:10]:
+        d = r["description"][:45] + "..." if len(r["description"]) > 45 else r["description"]
+        print(f"{r['rank']:2}. {d}")
+        print(f"    OI: {r['open_interest']:,} | Vol: {r['volume']:,} | Yes: {r['yes_probability']}%")
 
 if __name__ == "__main__":
     main()
