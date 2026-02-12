@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Background circle -->
+    <path
+        android:fillColor="#6200EE"
+        android:pathData="M54,54m-40,0a40,40 0,1 1,80 0a40,40 0,1 1,-80 0" />
+    <!-- Chart bars representing market data -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,70 L34,55 L42,55 L42,70 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M46,70 L46,45 L54,45 L54,70 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M58,70 L58,38 L66,38 L66,70 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M70,70 L70,50 L78,50 L78,70 Z" />
+    <!-- Trend line -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#03DAC5"
+        android:strokeWidth="3"
+        android:pathData="M30,58 L42,50 L54,42 L66,35 L78,45" />
+</vector>
