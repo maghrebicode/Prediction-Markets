@@ -41,7 +41,13 @@ TEST_MODE = True
 OVERPASS_URLS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
 ]
+# Overpass rejects browser-style User-Agents (406 error), so identify the script honestly.
+OVERPASS_HEADERS = {
+    "User-Agent": "TwinCitiesCafeFinder/1.0 (small personal script; python-requests)",
+    "Accept": "application/json",
+}
 
 CHAIN_NAMES = [
     "Starbucks", "Caribou", "Dunn Brothers", "Five Watt", "Peet's", "Panera",
@@ -98,7 +104,7 @@ def fetch_cafes(test_mode):
     for url in OVERPASS_URLS:
         try:
             print(f"  Asking {url} ...")
-            resp = requests.post(url, data={"data": query}, headers=HEADERS, timeout=200)
+            resp = requests.post(url, data={"data": query}, headers=OVERPASS_HEADERS, timeout=200)
             resp.raise_for_status()
             return resp.json()["elements"]
         except Exception as e:
