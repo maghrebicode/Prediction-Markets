@@ -15,12 +15,15 @@ How it works, step by step:
   7. Print a short summary.
 
 Usage:
-  python cafe_emails.py --test   # Minneapolis only, prints 5 results
-  python cafe_emails.py          # full run, both counties
+  Phone (Pydroid 3): set TEST_MODE below, open this file, tap Run.
+  Computer terminal:
+    python cafe_emails.py --test   # Minneapolis only, prints 5 results
+    python cafe_emails.py --full   # full run, both counties
 """
 
 import argparse
 import csv
+import os
 import re
 import sys
 import time
@@ -30,6 +33,10 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+
+# True  = quick test: Minneapolis only, 5 cafés, saved to cafes_test.csv
+# False = full run: both counties, saved to cafes_with_emails.csv
+TEST_MODE = True
 
 OVERPASS_URLS = [
     "https://overpass-api.de/api/interpreter",
@@ -235,7 +242,9 @@ def save_csv(cafes, path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--test", action="store_true", help="Minneapolis only, 5 results")
-    args = parser.parse_args()
+    parser.add_argument("--full", action="store_true", help="both counties")
+    args, _ = parser.parse_known_args()
+    args.test = (TEST_MODE or args.test) and not args.full
 
     print("Step 1: Getting cafés from OpenStreetMap...")
     raw = fetch_cafes(args.test)
@@ -262,7 +271,7 @@ def main():
         else:
             c["where_email_found"] = ""
 
-    out = "cafes_test.csv" if args.test else "cafes_with_emails.csv"
+    out = os.path.abspath("cafes_test.csv" if args.test else "cafes_with_emails.csv")
     print(f"Step 6: Saving to {out}...")
     cafes = save_csv(cafes, out)
 
@@ -278,6 +287,7 @@ def main():
     print(f"  Independent cafés found: {len(cafes)}")
     print(f"  With an email:           {with_email}")
     print(f"  Phone only (no email):   {phone_only}")
+    print(f"\nCSV saved to: {out}")
 
 
 if __name__ == "__main__":
