@@ -12,8 +12,10 @@ How it works, step by step:
   4. Drop cafés you have already contacted.
   5. Visit each café's website (homepage, /contact, /about, /contact-us) and
      look for email addresses.
-  6. Save the results to cafes_with_emails.csv, cafés with emails first.
-  7. Print a short summary.
+  6. Save each café to Download/Cafe Finder/cafes_with_emails.csv as soon as
+     it's checked. A rerun skips cafés already in the file, so it picks up
+     where it left off. At the end, cafés with emails are moved to the top.
+  7. Print a short summary, the full file path, and the number of rows saved.
 
 Usage:
   Phone (Pydroid 3): set TEST_MODE below, open this file, tap Run.
@@ -38,6 +40,10 @@ from bs4 import BeautifulSoup
 # True  = quick test: Minneapolis only, 5 cafés, saved to cafes_test.csv
 # False = full run: all 7 metro counties, saved to cafes_with_emails.csv
 TEST_MODE = False
+
+# Where the CSV goes. Leave blank to use your Download/Cafe Finder folder
+# automatically, or put a full folder path between the quotes.
+OUTPUT_FOLDER = ""
 
 METRO_COUNTIES = [
     "Anoka County", "Carver County", "Dakota County", "Hennepin County",
@@ -242,13 +248,53 @@ def scrape_site(website):
 COLUMNS = ["name", "address", "city", "phone", "website", "email", "where_email_found"]
 
 
-def save_csv(cafes, path):
-    cafes = sorted(cafes, key=lambda c: (not c["email"], c["name"].lower()))
-    with open(path, "w", newline="", encoding="utf-8") as f:
+def output_folder():
+    """Full path to the Cafe Finder folder in Downloads (created if missing)."""
+    if OUTPUT_FOLDER:
+        folder = OUTPUT_FOLDER
+    elif os.path.isdir("/storage/emulated/0"):  # Android phone (Pydroid)
+        folder = "/storage/emulated/0/Download/Cafe Finder"
+    else:  # Windows, Mac or Linux computer
+        folder = os.path.join(os.path.expanduser("~"), "Downloads", "Cafe Finder")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.abspath(folder)
+
+
+def cafe_key(c):
+    """Identifies a café so a rerun can tell it's already been saved."""
+    return f"{normalize(c['name'])}|{c['address'].strip().lower()}"
+
+
+def read_rows(path):
+    if not os.path.exists(path):
+        return []
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def append_row(path, cafe):
+    """Add one café to the end of the CSV and force it onto the disk right away."""
+    new_file = not os.path.exists(path) or os.path.getsize(path) == 0
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=COLUMNS, extrasaction="ignore")
+        if new_file:
+            w.writeheader()
+        w.writerow(cafe)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def sort_csv(path):
+    """Rewrite the CSV with emails first. Writes a temp copy, then swaps it in,
+    so the original is never lost if something goes wrong mid-write."""
+    rows = sorted(read_rows(path), key=lambda c: (not c["email"], c["name"].lower()))
+    tmp = path + ".tmp"
+    with open(tmp, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=COLUMNS, extrasaction="ignore")
         w.writeheader()
-        w.writerows(cafes)
-    return cafes
+        w.writerows(rows)
+    os.replace(tmp, path)
+    return rows
 
 
 def main():
@@ -257,6 +303,13 @@ def main():
     parser.add_argument("--full", action="store_true", help="all 7 metro counties")
     args, _ = parser.parse_known_args()
     args.test = (TEST_MODE or args.test) and not args.full
+
+    out = os.path.join(output_folder(), "cafes_test.csv" if args.test else "cafes_with_emails.csv")
+    print(f"Saving to: {out}")
+
+    done = {cafe_key(row) for row in read_rows(out)}
+    if done:
+        print(f"  Found {len(done)} cafés already saved there; those will be skipped.")
 
     print("Step 1: Getting cafés from OpenStreetMap...")
     raw = fetch_cafes(args.test)
@@ -267,39 +320,47 @@ def main():
 
     print("Steps 3-4: Removing chains and cafés you've already contacted...")
     cafes = filter_cafes(cafes)
-    print(f"  {len(cafes)} independent cafés left.")
+    print(f"  {len(cafes)} independent cafés found.")
 
+    cafes = [c for c in cafes if cafe_key(c) not in done]
+    print(f"  {len(cafes)} still to check.")
     if args.test:
         cafes = cafes[:5]
-        print("  Test mode: only checking the first 5.")
+        print("  Test mode: only checking 5.")
 
-    print("Step 5: Checking websites for emails (1 second between requests)...")
+    print("Step 5-6: Checking websites and saving each café as it's done...")
     for i, c in enumerate(cafes, 1):
+        print(f"  [{i}/{len(cafes)}] {c['name']}")
         if c["email"]:
             c["where_email_found"] = "OpenStreetMap"
         elif c["website"]:
-            print(f"  [{i}/{len(cafes)}] {c['name']}: {c['website']}")
             c["email"], c["where_email_found"] = scrape_site(c["website"])
         else:
             c["where_email_found"] = ""
+        append_row(out, c)
 
-    out = os.path.abspath("cafes_test.csv" if args.test else "cafes_with_emails.csv")
-    print(f"Step 6: Saving to {out}...")
-    cafes = save_csv(cafes, out)
+    rows = sort_csv(out) if os.path.exists(out) else []
 
     if args.test:
         print("\nTest results:")
-        for c in cafes:
+        for c in rows[:5]:
             print(f"  {c['name']} | {c['address']}, {c['city']} | {c['phone'] or '-'} | "
                   f"{c['website'] or '-'} | {c['email'] or '-'} ({c['where_email_found'] or 'none'})")
 
-    with_email = sum(1 for c in cafes if c["email"])
-    phone_only = sum(1 for c in cafes if not c["email"] and c["phone"])
+    with_email = sum(1 for c in rows if c["email"])
+    phone_only = sum(1 for c in rows if not c["email"] and c["phone"])
     print("\nStep 7: Summary")
-    print(f"  Independent cafés found: {len(cafes)}")
-    print(f"  With an email:           {with_email}")
-    print(f"  Phone only (no email):   {phone_only}")
-    print(f"\nCSV saved to: {out}")
+    print(f"  Independent cafés in file: {len(rows)}")
+    print(f"  With an email:             {with_email}")
+    print(f"  Phone only (no email):     {phone_only}")
+
+    # Open the file again to prove it's really there.
+    if os.path.exists(out):
+        confirmed = len(read_rows(out))
+        print(f"\nConfirmed: {out} exists with {confirmed} rows "
+              f"({os.path.getsize(out)} bytes).")
+    else:
+        print(f"\nWARNING: {out} was not created (no cafés were saved).")
 
 
 if __name__ == "__main__":
