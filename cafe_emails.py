@@ -1,10 +1,11 @@
 """
-Find independent cafés in Hennepin and Ramsey County, Minnesota, and collect
+Find independent cafés in the 7-county Twin Cities metro (Anoka, Carver,
+Dakota, Hennepin, Ramsey, Scott, Washington), Minnesota, and collect
 their public contact emails.
 
 How it works, step by step:
   1. Ask OpenStreetMap (via the free Overpass API) for every amenity=cafe and
-     shop=coffee inside the two counties.
+     shop=coffee inside the seven metro counties.
   2. Pull out name, address, city, phone, website, email and brand for each.
   3. Drop chains (anything with a brand tag, a fixed list of chain names, and
      any name that shows up at more than 2 addresses).
@@ -18,7 +19,7 @@ Usage:
   Phone (Pydroid 3): set TEST_MODE below, open this file, tap Run.
   Computer terminal:
     python cafe_emails.py --test   # Minneapolis only, prints 5 results
-    python cafe_emails.py --full   # full run, both counties
+    python cafe_emails.py --full   # full run, all 7 metro counties
 """
 
 import argparse
@@ -35,8 +36,13 @@ import requests
 from bs4 import BeautifulSoup
 
 # True  = quick test: Minneapolis only, 5 cafés, saved to cafes_test.csv
-# False = full run: both counties, saved to cafes_with_emails.csv
-TEST_MODE = True
+# False = full run: all 7 metro counties, saved to cafes_with_emails.csv
+TEST_MODE = False
+
+METRO_COUNTIES = [
+    "Anoka County", "Carver County", "Dakota County", "Hennepin County",
+    "Ramsey County", "Scott County", "Washington County",
+]
 
 OVERPASS_URLS = [
     "https://overpass-api.de/api/interpreter",
@@ -83,13 +89,13 @@ def build_query(test_mode):
     if test_mode:
         areas = 'area["name"="Minneapolis"]["admin_level"="8"]->.a;'
     else:
-        areas = (
-            'area["name"="Minnesota"]["admin_level"="4"]->.mn;'
-            '(area["name"="Hennepin County"]["admin_level"="6"](area.mn);'
-            ' area["name"="Ramsey County"]["admin_level"="6"](area.mn);)->.a;'
+        counties = "".join(
+            f'area["name"="{c}"]["admin_level"="6"](area.mn);' for c in METRO_COUNTIES
         )
+        areas = f'area["name"="Minnesota"]["admin_level"="4"]->.mn;({counties})->.a;'
+
     return f"""
-[out:json][timeout:180];
+[out:json][timeout:300];
 {areas}
 (
   nwr["amenity"="cafe"](area.a);
@@ -104,7 +110,7 @@ def fetch_cafes(test_mode):
     for url in OVERPASS_URLS:
         try:
             print(f"  Asking {url} ...")
-            resp = requests.post(url, data={"data": query}, headers=OVERPASS_HEADERS, timeout=200)
+            resp = requests.post(url, data={"data": query}, headers=OVERPASS_HEADERS, timeout=320)
             resp.raise_for_status()
             return resp.json()["elements"]
         except Exception as e:
@@ -248,7 +254,7 @@ def save_csv(cafes, path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--test", action="store_true", help="Minneapolis only, 5 results")
-    parser.add_argument("--full", action="store_true", help="both counties")
+    parser.add_argument("--full", action="store_true", help="all 7 metro counties")
     args, _ = parser.parse_known_args()
     args.test = (TEST_MODE or args.test) and not args.full
 
